@@ -1,18 +1,19 @@
 from flask import Flask, request
-import os, threading
+import os, threading, asyncio
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.schedulers.background import BackgroundScheduler
 from tradingview_scraper.symbols.technicals import Indicators
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID   = os.environ.get("CHAT_ID")
 
 flask_app = Flask(__name__)
-scheduler = AsyncIOScheduler()
+scheduler = BackgroundScheduler()
 watchlist = {}
 tg_app    = None
+bot_loop  = None
 
 @flask_app.route("/")
 def home():
@@ -20,7 +21,7 @@ def home():
 
 @flask_app.route("/webhook", methods=["POST"])
 def webhook():
-    data = request.get_json() if request.is_json else {"message": request.data.decode()}
+    data    = request.get_json() if request.is_json else {"message": request.data.decode()}
     ticker  = data.get("ticker",  "N/A")
     price   = data.get("price",   "N/A")
     action  = data.get("action",  "")
@@ -29,17 +30,15 @@ def webhook():
     text = (f"{emoji} *Alerta TradingView*\n━━━━━━━━━━━━━━━━\n"
             f"📌 Ticker: `{ticker}`\n💲 Precio: `{price}`\n"
             f"⚡ Acción: `{action}`\n📝 {message}")
-    if tg_app:
-        import asyncio
+    if tg_app and bot_loop:
         asyncio.run_coroutine_threadsafe(
             tg_app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown"),
-            tg_app.update_queue._loop if hasattr(tg_app.update_queue, '_loop') else asyncio.get_event_loop()
+            bot_loop
         )
     return "OK", 200
 
 def run_flask():
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-
 
 def get_stock(symbol, exchange="NASDAQ"):
     try:
@@ -47,17 +46,15 @@ def get_stock(symbol, exchange="NASDAQ"):
         data = i.scrape(exchange=exchange, symbol=symbol, timeframe="1m", allIndicators=True)
         if data.get("status") != "success":
             return None
-        d       = data.get("data", {})
-        close   = round(d.get("close", 0), 2)
-        ema10   = round(d.get("EMA10", 0), 2)
-        ema20   = round(d.get("EMA20", 0), 2)
-        rsi     = round(d.get("RSI", 0), 2)
-        macd    = round(d.get("MACD.macd", 0), 4)
-        sma20   = round(d.get("SMA20", 0), 2)
-        rec     = d.get("Recommend.All", 0)
-        if rec >= 0.5:   rec_txt = "💚 COMPRA"
-        elif rec <= -0.5: rec_txt = "🔴 VENTA"
-        else:             rec_txt = "🟡 NEUTRO"
+        d     = data.get("data", {})
+        close = round(d.get("close", 0), 2)
+        ema10 = round(d.get("EMA10", 0), 2)
+        ema20 = round(d.get("EMA20", 0), 2)
+        rsi   = round(d.get("RSI", 0), 2)
+        macd  = round(d.get("MACD.macd", 0), 4)
+        sma20 = round(d.get("SMA20", 0), 2)
+        rec   = d.get("Recommend.All", 0)
+        rec_txt = "💚 COMPRA" if rec >= 0.5 else "🔴 VENTA" if rec <= -0.5 else "🟡 NEUTRO"
         return (
             f"📡 *{symbol.upper()}* — `${close}`\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -70,32 +67,29 @@ def get_stock(symbol, exchange="NASDAQ"):
             f"🕐 Hora:   `{datetime.utcnow().strftime('%H:%M:%S')} UTC`\n"
             f"_Fuente: TradingView_"
         )
-    except Exception as e:
+    except:
         return None
-
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📡 *Stock Price Bot — TradingView*\n\n"
-        "Comandos:\n"
         "`/precio AAPL` — precio + indicadores\n"
-        "`/precio AAPL NYSE` — especifica el exchange\n"
-        "`/watch AAPL 60` — monitoreo cada N segundos\n"
+        "`/precio AAPL NYSE` — especifica exchange\n"
+        "`/watch AAPL 60` — cada N segundos\n"
         "`/stop AAPL` — detener monitoreo\n"
-        "`/lista` — ver monitoreos activos\n\n"
-        "🔔 También recibo alertas de TradingView automáticamente",
+        "`/lista` — monitoreos activos",
         parse_mode="Markdown"
     )
 
 async def precio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("⚠️ Uso: `/precio AAPL` o `/precio AAPL NYSE`", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Uso: `/precio AAPL`", parse_mode="Markdown")
         return
     symbol   = ctx.args[0].upper()
     exchange = ctx.args[1].upper() if len(ctx.args) > 1 else "NASDAQ"
-    await update.message.reply_text(f"⏳ Consultando {symbol} en TradingView...")
+    await update.message.reply_text(f"⏳ Consultando {symbol}...")
     msg = get_stock(symbol, exchange)
-    await update.message.reply_text(msg if msg else f"❌ No encontré `{symbol}` en `{exchange}`.", parse_mode="Markdown")
+    await update.message.reply_text(msg if msg else f"❌ No encontré `{symbol}`.", parse_mode="Markdown")
 
 async def watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if len(ctx.args) < 2:
@@ -104,20 +98,22 @@ async def watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     symbol   = ctx.args[0].upper()
     interval = max(30, int(ctx.args[1]))
     exchange = ctx.args[2].upper() if len(ctx.args) > 2 else "NASDAQ"
-    app      = ctx.application
 
-    async def send_update():
+    def send_update():
         msg = get_stock(symbol, exchange)
-        if msg:
-            await app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+        if msg and tg_app and bot_loop:
+            asyncio.run_coroutine_threadsafe(
+                tg_app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown"),
+                bot_loop
+            )
 
     job_id = f"watch_{symbol}"
     if scheduler.get_job(job_id):
-        scheduler.get_job(job_id).remove()
-    scheduler.add_job(send_update, "interval", seconds=interval, id=job_id, max_instances=1)
+        scheduler.remove_job(job_id)
+    scheduler.add_job(send_update, "interval", seconds=interval, id=job_id)
     watchlist[symbol] = interval
     await update.message.reply_text(
-        f"✅ Monitoreando *{symbol}* cada *{interval}s* vía TradingView\n`/stop {symbol}` para cancelar.",
+        f"✅ Monitoreando *{symbol}* cada *{interval}s*\n`/stop {symbol}` para cancelar.",
         parse_mode="Markdown"
     )
 
@@ -126,9 +122,8 @@ async def stop_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Uso: `/stop AAPL`", parse_mode="Markdown")
         return
     symbol = ctx.args[0].upper()
-    job    = scheduler.get_job(f"watch_{symbol}")
-    if job:
-        job.remove()
+    if scheduler.get_job(f"watch_{symbol}"):
+        scheduler.remove_job(f"watch_{symbol}")
         watchlist.pop(symbol, None)
         await update.message.reply_text(f"🛑 Monitoreo de *{symbol}* detenido.", parse_mode="Markdown")
     else:
@@ -138,22 +133,20 @@ async def lista(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not watchlist:
         await update.message.reply_text("📋 No hay monitoreos activos.")
         return
-    lines = ["📋 *Monitoreos activos:*\n"]
-    for sym, iv in watchlist.items():
-        lines.append(f"• `{sym}` — cada {iv}s")
+    lines = ["📋 *Monitoreos activos:*\n"] + [f"• `{s}` — cada {v}s" for s, v in watchlist.items()]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
-
 def main():
-    global tg_app
+    global tg_app, bot_loop
     threading.Thread(target=run_flask, daemon=True).start()
-    tg_app = Application.builder().token(BOT_TOKEN).build()
+    scheduler.start()
+    tg_app   = Application.builder().token(BOT_TOKEN).build()
+    bot_loop = asyncio.new_event_loop()
     tg_app.add_handler(CommandHandler("start",  start))
     tg_app.add_handler(CommandHandler("precio", precio))
     tg_app.add_handler(CommandHandler("watch",  watch))
     tg_app.add_handler(CommandHandler("stop",   stop_watch))
     tg_app.add_handler(CommandHandler("lista",  lista))
-    scheduler.start()
     tg_app.run_polling()
 
 if __name__ == "__main__":
