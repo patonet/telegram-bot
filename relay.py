@@ -17,9 +17,9 @@ bot_loop  = None
 
 def detect_exchange(symbol):
     s = symbol.upper()
-    futures = ["ES1","NQ1","CL1","GC1","SI1","ZB1","ZN1","NG1","YM1","RTY1","NKD1","6E1","6J1","6B1"]
+    futures_base = ["ES1","NQ1","CL1","GC1","SI1","ZB1","ZN1","NG1","YM1","RTY1","NKD1","6E1","6J1","6B1"]
     clean = s.replace("!","")
-    if clean in futures or s.endswith("1!") or s.endswith("2!"):
+    if clean in futures_base or s.endswith("1!") or s.endswith("2!"):
         if clean in ["GC1","SI1","HG1"]: return "COMEX"
         if clean in ["CL1","NG1","RB1","HO1"]: return "NYMEX"
         return "CME"
@@ -29,11 +29,9 @@ def detect_exchange(symbol):
     if re.search(r'(USDT|USDC|BUSD|BTC|ETH|BNB)$', s):
         return "BINANCE"
     etfs = ["SPY","QQQ","IWM","DIA","GLD","SLV","USO","TLT","IEF","HYG","LQD","EEM","VTI","VOO","VEA","VWO","XLF","XLE","XLK","XLV","XLI","XLU","XLP","XLY","XLB","ARKK","ARKG","ARKW"]
-    if s in etfs:
-        return "AMEX"
+    if s in etfs: return "AMEX"
     nyse = ["JPM","BAC","WFC","GS","MS","C","V","MA","XOM","CVX","JNJ","PG","KO","PEP","MCD","WMT","HD","DIS","BA","GE","IBM","MMM","CAT","T","VZ","BRK.A","BRK.B"]
-    if s in nyse:
-        return "NYSE"
+    if s in nyse: return "NYSE"
     return "NASDAQ"
 
 @flask_app.route("/")
@@ -63,34 +61,50 @@ def webhook():
 def run_flask():
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
+def sma_emoji(price, sma):
+    if sma == 0: return "⚪"
+    return "🟢" if price > sma else "🔴"
+
 def get_stock(symbol, exchange=None):
     try:
         if not exchange:
             exchange = detect_exchange(symbol)
+        futures_base = ["ES1","NQ1","CL1","GC1","SI1","ZB1","ZN1","NG1","YM1","RTY1"]
+        tv_symbol = symbol.upper()
+        if tv_symbol.replace("!","") in futures_base and not tv_symbol.endswith("!"):
+            tv_symbol = tv_symbol + "!"
         i    = Indicators()
-        data = i.scrape(exchange=exchange, symbol=symbol.upper(), timeframe="1m", allIndicators=True)
+        data = i.scrape(exchange=exchange, symbol=tv_symbol, timeframe="1W", allIndicators=True)
         if data.get("status") != "success":
             return None, exchange
-        d     = data.get("data", {})
-        close = round(d.get("close", 0), 2)
-        ema10 = round(d.get("EMA10", 0), 2)
-        ema20 = round(d.get("EMA20", 0), 2)
-        rsi   = round(d.get("RSI", 0), 2)
-        macd  = round(d.get("MACD.macd", 0), 4)
-        sma20 = round(d.get("SMA20", 0), 2)
-        rec   = d.get("Recommend.All", 0)
-        rec_txt = "💚 COMPRA" if rec >= 0.5 else "🔴 VENTA" if rec <= -0.5 else "🟡 NEUTRO"
+        d      = data.get("data", {})
+        close  = round(d.get("close", 0), 2)
+        change = round(d.get("change", 0), 2)
+        sma20  = round(d.get("SMA20", 0), 2)
+        sma50  = round(d.get("SMA50", 0), 2)
+        sma200 = round(d.get("SMA200", 0), 2)
+        rsi    = round(d.get("RSI", 0), 2)
+        pe     = round(d.get("price_earnings_ttm", 0), 2)
+        margin = round(d.get("net_margin", 0) * 100, 2)
+        roe    = round(d.get("return_on_equity", 0) * 100, 2)
+        chg_emoji  = "🟢" if change >= 0 else "🔴"
+        rsi_emoji  = "🟢" if rsi < 70 and rsi > 30 else "🔴" if rsi >= 70 or rsi <= 30 else "🟡"
+        pe_txt     = f"`{pe}`" if pe > 0 else "`N/A`"
+        margin_txt = f"`{margin}%`" if margin != 0 else "`N/A`"
+        roe_txt    = f"`{roe}%`" if roe != 0 else "`N/A`"
         msg = (
             f"📡 *{symbol.upper()}* — `${close}`\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"📊 RSI:    `{rsi}`\n"
-            f"📈 EMA10:  `${ema10}`\n"
-            f"📈 EMA20:  `${ema20}`\n"
-            f"📉 SMA20:  `${sma20}`\n"
-            f"⚡ MACD:   `{macd}`\n"
-            f"🤖 Señal:  {rec_txt}\n"
-            f"🕐 Hora:   `{datetime.utcnow().strftime('%H:%M:%S')} UTC`\n"
-            f"🏦 Exchange: `{exchange}`\n"
+            f"{chg_emoji} Cambio semanal: `{change}%`\n"
+            f"📊 RSI14:  {rsi_emoji} `{rsi}`\n"
+            f"〽️ SMA20:  {sma_emoji(close,sma20)} `${sma20}`\n"
+            f"〽️ SMA50:  {sma_emoji(close,sma50)} `${sma50}`\n"
+            f"〽️ SMA200: {sma_emoji(close,sma200)} `${sma200}`\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"💼 P/E TTM:    {pe_txt}\n"
+            f"💼 Margen Net: {margin_txt}\n"
+            f"💼 ROE:        {roe_txt}\n"
+            f"🏦 Exchange: `{exchange}` | _Semanal_\n"
             f"_Fuente: TradingView_"
         )
         return msg, exchange
@@ -100,7 +114,7 @@ def get_stock(symbol, exchange=None):
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📡 *Stock Price Bot*\n\n"
-        "Exchange se detecta automáticamente:\n\n"
+        "Exchange detectado automáticamente:\n\n"
         "`/precio AAPL` — NASDAQ\n"
         "`/precio SPY` — ETF\n"
         "`/precio EURUSD` — Forex\n"
@@ -120,13 +134,13 @@ async def precio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     symbol   = ctx.args[0].upper()
     exchange = ctx.args[1].upper() if len(ctx.args) > 1 else None
     detected = exchange or detect_exchange(symbol)
-    await update.message.reply_text(f"Consultando `{symbol}` en `{detected}`...", parse_mode="Markdown")
+    await update.message.reply_text(f"⏳ Consultando `{symbol}` en `{detected}`...", parse_mode="Markdown")
     msg, exch = get_stock(symbol, exchange)
     if msg:
         await update.message.reply_text(msg, parse_mode="Markdown")
     else:
         await update.message.reply_text(
-            f"No encontré `{symbol}` en `{detected}`.\n"
+            f"❌ No encontré `{symbol}` en `{detected}`.\n"
             f"Prueba: `/precio {symbol} EXCHANGE`\n"
             f"Opciones: NASDAQ NYSE AMEX BINANCE FX CME NYMEX COMEX",
             parse_mode="Markdown"
@@ -154,7 +168,7 @@ async def watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     scheduler.add_job(send_update, "interval", seconds=interval, id=job_id)
     watchlist[symbol] = interval
     await update.message.reply_text(
-        f"Monitoreando *{symbol}* cada *{interval}s*\n`/stop {symbol}` para cancelar.",
+        f"✅ Monitoreando *{symbol}* cada *{interval}s*\n`/stop {symbol}` para cancelar.",
         parse_mode="Markdown"
     )
 
@@ -166,15 +180,15 @@ async def stop_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if scheduler.get_job(f"watch_{symbol}"):
         scheduler.remove_job(f"watch_{symbol}")
         watchlist.pop(symbol, None)
-        await update.message.reply_text(f"Detenido: *{symbol}*", parse_mode="Markdown")
+        await update.message.reply_text(f"🛑 Detenido: *{symbol}*", parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"No hay monitoreo activo para `{symbol}`.", parse_mode="Markdown")
+        await update.message.reply_text(f"⚠️ No hay monitoreo activo para `{symbol}`.", parse_mode="Markdown")
 
 async def lista(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not watchlist:
-        await update.message.reply_text("No hay monitoreos activos.")
+        await update.message.reply_text("📋 No hay monitoreos activos.")
         return
-    lines = ["*Monitoreos activos:*\n"] + [f"• `{s}` — cada {v}s" for s, v in watchlist.items()]
+    lines = ["📋 *Monitoreos activos:*\n"] + [f"• `{s}` — cada {v}s" for s, v in watchlist.items()]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 def main():
