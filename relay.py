@@ -74,7 +74,7 @@ def get_stock(symbol, exchange=None):
         if tv_symbol.replace("!","") in futures_base and not tv_symbol.endswith("!"):
             tv_symbol = tv_symbol + "!"
         i    = Indicators()
-        data = i.scrape(exchange=exchange, symbol=tv_symbol, timeframe="1W", allIndicators=True)
+        data = i.scrape(exchange=exchange, symbol=tv_symbol, timeframe="1w", allIndicators=True)
         if data.get("status") != "success":
             return None, exchange
         d      = data.get("data", {})
