@@ -1,5 +1,5 @@
 from flask import Flask, request
-import os, threading, asyncio
+import os, threading, asyncio, re
 from datetime import datetime
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
@@ -15,6 +15,27 @@ watchlist = {}
 tg_app    = None
 bot_loop  = None
 
+def detect_exchange(symbol):
+    s = symbol.upper()
+    futures = ["ES1","NQ1","CL1","GC1","SI1","ZB1","ZN1","NG1","YM1","RTY1","NKD1","6E1","6J1","6B1"]
+    clean = s.replace("!","")
+    if clean in futures or s.endswith("1!") or s.endswith("2!"):
+        if clean in ["GC1","SI1","HG1"]: return "COMEX"
+        if clean in ["CL1","NG1","RB1","HO1"]: return "NYMEX"
+        return "CME"
+    forex_currencies = ["USD","EUR","GBP","JPY","CHF","AUD","CAD","NZD","MXN","BRL","SEK","NOK","DKK"]
+    if len(s) == 6 and s[:3] in forex_currencies and s[3:] in forex_currencies:
+        return "FX"
+    if re.search(r'(USDT|USDC|BUSD|BTC|ETH|BNB)$', s):
+        return "BINANCE"
+    etfs = ["SPY","QQQ","IWM","DIA","GLD","SLV","USO","TLT","IEF","HYG","LQD","EEM","VTI","VOO","VEA","VWO","XLF","XLE","XLK","XLV","XLI","XLU","XLP","XLY","XLB","ARKK","ARKG","ARKW"]
+    if s in etfs:
+        return "AMEX"
+    nyse = ["JPM","BAC","WFC","GS","MS","C","V","MA","XOM","CVX","JNJ","PG","KO","PEP","MCD","WMT","HD","DIS","BA","GE","IBM","MMM","CAT","T","VZ","BRK.A","BRK.B"]
+    if s in nyse:
+        return "NYSE"
+    return "NASDAQ"
+
 @flask_app.route("/")
 def home():
     return "Bot activo", 200
@@ -27,9 +48,11 @@ def webhook():
     action  = data.get("action",  "")
     message = data.get("message", "")
     emoji   = "🟢" if "buy" in action.lower() else "🔴" if "sell" in action.lower() else "📡"
-    text = (f"{emoji} *Alerta TradingView*\n━━━━━━━━━━━━━━━━\n"
-            f"📌 Ticker: `{ticker}`\n💲 Precio: `{price}`\n"
-            f"⚡ Acción: `{action}`\n📝 {message}")
+    text = (f"{emoji} *Alerta TradingView*\n"
+            f"📌 Ticker: `{ticker}`\n"
+            f"💲 Precio: `{price}`\n"
+            f"⚡ Acción: `{action}`\n"
+            f"📝 {message}")
     if tg_app and bot_loop:
         asyncio.run_coroutine_threadsafe(
             tg_app.bot.send_message(chat_id=CHAT_ID, text=text, parse_mode="Markdown"),
@@ -40,12 +63,14 @@ def webhook():
 def run_flask():
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
-def get_stock(symbol, exchange="NASDAQ"):
+def get_stock(symbol, exchange=None):
     try:
+        if not exchange:
+            exchange = detect_exchange(symbol)
         i    = Indicators()
-        data = i.scrape(exchange=exchange, symbol=symbol, timeframe="1m", allIndicators=True)
+        data = i.scrape(exchange=exchange, symbol=symbol.upper(), timeframe="1m", allIndicators=True)
         if data.get("status") != "success":
-            return None
+            return None, exchange
         d     = data.get("data", {})
         close = round(d.get("close", 0), 2)
         ema10 = round(d.get("EMA10", 0), 2)
@@ -55,7 +80,7 @@ def get_stock(symbol, exchange="NASDAQ"):
         sma20 = round(d.get("SMA20", 0), 2)
         rec   = d.get("Recommend.All", 0)
         rec_txt = "💚 COMPRA" if rec >= 0.5 else "🔴 VENTA" if rec <= -0.5 else "🟡 NEUTRO"
-        return (
+        msg = (
             f"📡 *{symbol.upper()}* — `${close}`\n"
             f"━━━━━━━━━━━━━━━━━━\n"
             f"📊 RSI:    `{rsi}`\n"
@@ -65,42 +90,58 @@ def get_stock(symbol, exchange="NASDAQ"):
             f"⚡ MACD:   `{macd}`\n"
             f"🤖 Señal:  {rec_txt}\n"
             f"🕐 Hora:   `{datetime.utcnow().strftime('%H:%M:%S')} UTC`\n"
+            f"🏦 Exchange: `{exchange}`\n"
             f"_Fuente: TradingView_"
         )
-    except:
-        return None
+        return msg, exchange
+    except Exception as e:
+        return None, exchange
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📡 *Stock Price Bot — TradingView*\n\n"
-        "`/precio AAPL` — precio + indicadores\n"
-        "`/precio AAPL NYSE` — especifica exchange\n"
-        "`/watch AAPL 60` — cada N segundos\n"
-        "`/stop AAPL` — detener monitoreo\n"
-        "`/lista` — monitoreos activos",
+        "📡 *Stock Price Bot*\n\n"
+        "Exchange se detecta automáticamente:\n\n"
+        "`/precio AAPL` — NASDAQ\n"
+        "`/precio SPY` — ETF\n"
+        "`/precio EURUSD` — Forex\n"
+        "`/precio BTCUSDT` — Crypto\n"
+        "`/precio ES1` — Futuro S&P\n\n"
+        "`/precio AAPL NYSE` — forzar exchange\n"
+        "`/watch BTCUSDT 60` — monitoreo auto\n"
+        "`/stop BTCUSDT` — detener\n"
+        "`/lista` — activos monitoreados",
         parse_mode="Markdown"
     )
 
 async def precio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("⚠️ Uso: `/precio AAPL`", parse_mode="Markdown")
+        await update.message.reply_text("Uso: `/precio AAPL`", parse_mode="Markdown")
         return
     symbol   = ctx.args[0].upper()
-    exchange = ctx.args[1].upper() if len(ctx.args) > 1 else "NASDAQ"
-    await update.message.reply_text(f"⏳ Consultando {symbol}...")
-    msg = get_stock(symbol, exchange)
-    await update.message.reply_text(msg if msg else f"❌ No encontré `{symbol}`.", parse_mode="Markdown")
+    exchange = ctx.args[1].upper() if len(ctx.args) > 1 else None
+    detected = exchange or detect_exchange(symbol)
+    await update.message.reply_text(f"Consultando `{symbol}` en `{detected}`...", parse_mode="Markdown")
+    msg, exch = get_stock(symbol, exchange)
+    if msg:
+        await update.message.reply_text(msg, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(
+            f"No encontré `{symbol}` en `{detected}`.\n"
+            f"Prueba: `/precio {symbol} EXCHANGE`\n"
+            f"Opciones: NASDAQ NYSE AMEX BINANCE FX CME NYMEX COMEX",
+            parse_mode="Markdown"
+        )
 
 async def watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if len(ctx.args) < 2:
-        await update.message.reply_text("⚠️ Uso: `/watch AAPL 60`", parse_mode="Markdown")
+        await update.message.reply_text("Uso: `/watch BTCUSDT 60`", parse_mode="Markdown")
         return
     symbol   = ctx.args[0].upper()
     interval = max(30, int(ctx.args[1]))
-    exchange = ctx.args[2].upper() if len(ctx.args) > 2 else "NASDAQ"
+    exchange = ctx.args[2].upper() if len(ctx.args) > 2 else None
 
     def send_update():
-        msg = get_stock(symbol, exchange)
+        msg, _ = get_stock(symbol, exchange)
         if msg and tg_app and bot_loop:
             asyncio.run_coroutine_threadsafe(
                 tg_app.bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown"),
@@ -113,27 +154,27 @@ async def watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     scheduler.add_job(send_update, "interval", seconds=interval, id=job_id)
     watchlist[symbol] = interval
     await update.message.reply_text(
-        f"✅ Monitoreando *{symbol}* cada *{interval}s*\n`/stop {symbol}` para cancelar.",
+        f"Monitoreando *{symbol}* cada *{interval}s*\n`/stop {symbol}` para cancelar.",
         parse_mode="Markdown"
     )
 
 async def stop_watch(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not ctx.args:
-        await update.message.reply_text("⚠️ Uso: `/stop AAPL`", parse_mode="Markdown")
+        await update.message.reply_text("Uso: `/stop AAPL`", parse_mode="Markdown")
         return
     symbol = ctx.args[0].upper()
     if scheduler.get_job(f"watch_{symbol}"):
         scheduler.remove_job(f"watch_{symbol}")
         watchlist.pop(symbol, None)
-        await update.message.reply_text(f"🛑 Monitoreo de *{symbol}* detenido.", parse_mode="Markdown")
+        await update.message.reply_text(f"Detenido: *{symbol}*", parse_mode="Markdown")
     else:
-        await update.message.reply_text(f"⚠️ No hay monitoreo activo para `{symbol}`.", parse_mode="Markdown")
+        await update.message.reply_text(f"No hay monitoreo activo para `{symbol}`.", parse_mode="Markdown")
 
 async def lista(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not watchlist:
-        await update.message.reply_text("📋 No hay monitoreos activos.")
+        await update.message.reply_text("No hay monitoreos activos.")
         return
-    lines = ["📋 *Monitoreos activos:*\n"] + [f"• `{s}` — cada {v}s" for s, v in watchlist.items()]
+    lines = ["*Monitoreos activos:*\n"] + [f"• `{s}` — cada {v}s" for s, v in watchlist.items()]
     await update.message.reply_text("\n".join(lines), parse_mode="Markdown")
 
 def main():
