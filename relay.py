@@ -22,7 +22,7 @@ def detect_exchange(symbol):
     if clean in futures_base or s.endswith("1!") or s.endswith("2!"):
         if clean in ["GC1","SI1","HG1"]: return "COMEX"
         if clean in ["CL1","NG1","RB1","HO1"]: return "NYMEX"
-        return "CME"
+        return "CME_MINI"
     forex_currencies = ["USD","EUR","GBP","JPY","CHF","AUD","CAD","NZD","MXN","BRL","SEK","NOK","DKK"]
     if len(s) == 6 and s[:3] in forex_currencies and s[3:] in forex_currencies:
         return "FX"
@@ -30,7 +30,7 @@ def detect_exchange(symbol):
         return "BINANCE"
     etfs = ["SPY","QQQ","IWM","DIA","GLD","SLV","USO","TLT","IEF","HYG","LQD","EEM","VTI","VOO","VEA","VWO","XLF","XLE","XLK","XLV","XLI","XLU","XLP","XLY","XLB","ARKK","ARKG","ARKW"]
     if s in etfs: return "AMEX"
-    nyse = ["JPM","BAC","WFC","GS","MS","C","V","MA","XOM","CVX","JNJ","PG","KO","PEP","MCD","WMT","HD","DIS","BA","GE","IBM","MMM","CAT","T","VZ","BRK.A","BRK.B","COST","AXP","UNH","CVS","MO","PM","LMT","RTX","HON","UPS","FDX","SBUX","NKE","TGT","LOW","TJX","CL","PFE","MRK","ABBV","ABT","MDT","BMY","AMGN","BLK","SCHW","AIG","MET","PRU","USB","PNC","TFC","COF","ADP","ICE","CME","AON","MMC","SPG","PSA","O","AMT","CCI","DLR","WELL"]
+    nyse = ["JPM","BAC","WFC","GS","MS","C","V","MA","XOM","CVX","JNJ","PG","KO","PEP","MCD","WMT","HD","DIS","BA","GE","IBM","MMM","CAT","T","VZ","BRK.A","BRK.B","AXP","UNH","CVS","MO","PM","LMT","RTX","HON","UPS","FDX","SBUX","NKE","TGT","LOW","TJX","CL","PFE","MRK","ABBV","ABT","MDT","BMY","AMGN","BLK","SCHW","AIG","MET","PRU","USB","PNC","TFC","COF","ADP","ICE","CME","AON","MMC","SPG","PSA","O","AMT","CCI","DLR","WELL"]
     if s in nyse: return "NYSE"
     return "NASDAQ"
 
