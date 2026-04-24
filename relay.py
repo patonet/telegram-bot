@@ -106,7 +106,8 @@ def get_stock(symbol, exchange=None):
             return None, exchange
         d      = data.get("data", {})
         close  = round(d.get("close") or 0, 2)
-        change = round(d.get("change") or 0, 2)
+        change_d = i.scrape(exchange=exchange, symbol=tv_symbol, timeframe="1d", allIndicators=False)
+        change = round((change_d.get("data") or {}).get("change") or 0, 2)
         sma20  = round(d.get("SMA20")  or 0, 2)
         sma50  = round(d.get("SMA50")  or 0, 2)
         sma200 = round(d.get("SMA200") or 0, 2)
