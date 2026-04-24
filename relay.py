@@ -106,7 +106,12 @@ def get_stock(symbol, exchange=None):
             return None, exchange
         d      = data.get("data", {})
         close  = round(d.get("close") or 0, 2)
-        change = round(d.get("change") or 0, 2)
+        try:
+            yf_info = yf.Ticker(clean).fast_info
+            change = round(getattr(yf_info, "three_month_change", None) or 0, 2)
+            change = round((getattr(yf_info, "last_price", 0) - getattr(yf_info, "previous_close", 0)) / getattr(yf_info, "previous_close", 1) * 100, 2)
+        except:
+            change = 0
         sma20  = round(d.get("SMA20")  or 0, 2)
         sma50  = round(d.get("SMA50")  or 0, 2)
         sma200 = round(d.get("SMA200") or 0, 2)
