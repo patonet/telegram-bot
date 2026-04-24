@@ -3,3 +3,4 @@ python-telegram-bot
 apscheduler
 tradingview-scraper
 setuptools
+yfinance

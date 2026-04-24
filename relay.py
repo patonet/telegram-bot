@@ -5,6 +5,7 @@ from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from apscheduler.schedulers.background import BackgroundScheduler
 from tradingview_scraper.symbols.technicals import Indicators
+import yfinance as yf
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 CHAT_ID   = os.environ.get("CHAT_ID")
@@ -15,24 +16,54 @@ watchlist = {}
 tg_app    = None
 bot_loop  = None
 
+FUTURES_MAP = {
+    "ES1": "CME_MINI", "NQ1": "CME_MINI", "YM1": "CME_MINI", "RTY1": "CME_MINI",
+    "GC1": "COMEX",    "SI1": "COMEX",    "HG1": "COMEX",
+    "CL1": "NYMEX",    "NG1": "NYMEX",    "RB1": "NYMEX",
+    "ZB1": "CBOT",     "ZN1": "CBOT",     "ZC1": "CBOT",
+}
+
+EXCHANGE_MAP = {
+    "NMS": "NASDAQ", "NGM": "NASDAQ", "NCM": "NASDAQ",
+    "NYQ": "NYSE",   "NYA": "NYSE",
+    "PCX": "AMEX",   "ASE": "AMEX",
+    "BTS": "BINANCE","CCC": "BINANCE",
+}
+
 def detect_exchange(symbol):
-    s = symbol.upper()
-    futures_base = ["ES1","NQ1","CL1","GC1","SI1","ZB1","ZN1","NG1","YM1","RTY1","NKD1","6E1","6J1","6B1"]
-    clean = s.replace("!","")
-    if clean in futures_base or s.endswith("1!") or s.endswith("2!"):
-        if clean in ["GC1","SI1","HG1"]: return "COMEX"
-        if clean in ["CL1","NG1","RB1","HO1"]: return "NYMEX"
-        return "CME_MINI"
+    s = symbol.upper().replace("!","")
+    if s in FUTURES_MAP:
+        return FUTURES_MAP[s]
     forex_currencies = ["USD","EUR","GBP","JPY","CHF","AUD","CAD","NZD","MXN","BRL","SEK","NOK","DKK"]
     if len(s) == 6 and s[:3] in forex_currencies and s[3:] in forex_currencies:
         return "FX"
     if re.search(r'(USDT|USDC|BUSD|BTC|ETH|BNB)$', s):
         return "BINANCE"
-    etfs = ["SPY","QQQ","IWM","DIA","GLD","SLV","USO","TLT","IEF","HYG","LQD","EEM","VTI","VOO","VEA","VWO","XLF","XLE","XLK","XLV","XLI","XLU","XLP","XLY","XLB","ARKK","ARKG","ARKW"]
-    if s in etfs: return "AMEX"
-    nyse = ["JPM","BAC","WFC","GS","MS","C","V","MA","XOM","CVX","JNJ","PG","KO","PEP","MCD","WMT","HD","DIS","BA","GE","IBM","MMM","CAT","T","VZ","BRK.A","BRK.B","AXP","UNH","CVS","MO","PM","LMT","RTX","HON","UPS","FDX","SBUX","NKE","TGT","LOW","TJX","CL","PFE","MRK","ABBV","ABT","MDT","BMY","AMGN","BLK","SCHW","AIG","MET","PRU","USB","PNC","TFC","COF","ADP","ICE","CME","AON","MMC","SPG","PSA","O","AMT","CCI","DLR","WELL"]
-    if s in nyse: return "NYSE"
+    try:
+        info = yf.Ticker(symbol).fast_info
+        exch = getattr(info, 'exchange', None)
+        if exch and exch in EXCHANGE_MAP:
+            return EXCHANGE_MAP[exch]
+    except:
+        pass
     return "NASDAQ"
+
+def get_fundamentals(symbol):
+    try:
+        info = yf.Ticker(symbol).info
+        pe     = info.get("trailingPE")
+        margin = info.get("profitMargins")
+        roe    = info.get("returnOnEquity")
+        pe_txt     = f"`{round(pe,2)}`"          if pe     else "`N/A`"
+        margin_txt = f"`{round(margin*100,2)}%`"  if margin else "`N/A`"
+        roe_txt    = f"`{round(roe*100,2)}%`"     if roe    else "`N/A`"
+        return pe_txt, margin_txt, roe_txt
+    except:
+        return "`N/A`", "`N/A`", "`N/A`"
+
+def sma_emoji(price, sma):
+    if not sma or sma == 0: return "⚪"
+    return "🟢" if price > sma else "🔴"
 
 @flask_app.route("/")
 def home():
@@ -61,41 +92,34 @@ def webhook():
 def run_flask():
     flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
 
-def sma_emoji(price, sma):
-    if sma == 0: return "⚪"
-    return "🟢" if price > sma else "🔴"
-
 def get_stock(symbol, exchange=None):
     try:
         if not exchange:
             exchange = detect_exchange(symbol)
-        futures_base = ["ES1","NQ1","CL1","GC1","SI1","ZB1","ZN1","NG1","YM1","RTY1"]
         tv_symbol = symbol.upper()
-        if tv_symbol.replace("!","") in futures_base and not tv_symbol.endswith("!"):
-            tv_symbol = tv_symbol + "!"
+        clean = tv_symbol.replace("!","")
+        if clean in FUTURES_MAP and not tv_symbol.endswith("!"):
+            tv_symbol = clean + "!"
         i    = Indicators()
         data = i.scrape(exchange=exchange, symbol=tv_symbol, timeframe="1w", allIndicators=True)
         if data.get("status") != "success":
             return None, exchange
         d      = data.get("data", {})
-        close  = round(d.get("close", 0), 2)
-        change = round(d.get("change", 0), 2)
-        sma20  = round(d.get("SMA20", 0), 2)
-        sma50  = round(d.get("SMA50", 0), 2)
-        sma200 = round(d.get("SMA200", 0), 2)
-        rsi    = round(d.get("RSI", 0), 2)
-        pe     = round(d.get("price_earnings_ttm", 0), 2)
-        margin = round(d.get("net_margin", 0) * 100, 2)
-        roe    = round(d.get("return_on_equity", 0) * 100, 2)
-        chg_emoji  = "🟢" if change >= 0 else "🔴"
-        rsi_emoji  = "🟢" if rsi < 70 and rsi > 30 else "🔴" if rsi >= 70 or rsi <= 30 else "🟡"
-        pe_txt     = f"`{pe}`" if pe > 0 else "`N/A`"
-        margin_txt = f"`{margin}%`" if margin != 0 else "`N/A`"
-        roe_txt    = f"`{roe}%`" if roe != 0 else "`N/A`"
+        close  = round(d.get("close") or 0, 2)
+        change = round(d.get("change") or 0, 2)
+        sma20  = round(d.get("SMA20")  or 0, 2)
+        sma50  = round(d.get("SMA50")  or 0, 2)
+        sma200 = round(d.get("SMA200") or 0, 2)
+        rsi    = round(d.get("RSI")    or 0, 2)
+        if close == 0:
+            return None, exchange
+        pe_txt, margin_txt, roe_txt = get_fundamentals(clean)
+        chg_emoji = "🟢" if change >= 0 else "🔴"
+        rsi_emoji = "🔴" if rsi >= 70 or rsi <= 30 else "🟢"
         msg = (
-            f"📡 *{symbol.upper()}* — `${close}`\n"
+            f"📡 *{clean}* — `${close}`\n"
             f"━━━━━━━━━━━━━━━━━━\n"
-            f"{chg_emoji} Cambio semanal: `{change}%`\n"
+            f"{chg_emoji} Cambio diario: `{change}%`\n"
             f"📊 RSI14:  {rsi_emoji} `{rsi}`\n"
             f"〽️ SMA20:  {sma_emoji(close,sma20)} `${sma20}`\n"
             f"〽️ SMA50:  {sma_emoji(close,sma50)} `${sma50}`\n"
@@ -104,8 +128,8 @@ def get_stock(symbol, exchange=None):
             f"💼 P/E TTM:    {pe_txt}\n"
             f"💼 Margen Net: {margin_txt}\n"
             f"💼 ROE:        {roe_txt}\n"
-            f"🏦 Exchange: `{exchange}` | _Semanal_\n"
-            f"_Fuente: TradingView_"
+            f"🏦 `{exchange}` | _SMA/RSI Semanal_\n"
+            f"_Fuente: TradingView + Yahoo Finance_"
         )
         return msg, exchange
     except Exception as e:
@@ -114,12 +138,10 @@ def get_stock(symbol, exchange=None):
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "📡 *Stock Price Bot*\n\n"
-        "Exchange detectado automáticamente:\n\n"
-        "`/precio AAPL` — NASDAQ\n"
-        "`/precio SPY` — ETF\n"
+        "`/precio AAPL` — acciones\n"
+        "`/precio SPY` — ETFs\n"
         "`/precio EURUSD` — Forex\n"
-        "`/precio BTCUSDT` — Crypto\n"
-        "`/precio ES1` — Futuro S&P\n\n"
+        "`/precio BTCUSDT` — Crypto\n\n"
         "`/precio AAPL NYSE` — forzar exchange\n"
         "`/watch BTCUSDT 60` — monitoreo auto\n"
         "`/stop BTCUSDT` — detener\n"
@@ -142,7 +164,7 @@ async def precio(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"❌ No encontré `{symbol}` en `{detected}`.\n"
             f"Prueba: `/precio {symbol} EXCHANGE`\n"
-            f"Opciones: NASDAQ NYSE AMEX BINANCE FX CME NYMEX COMEX",
+            f"Opciones: NASDAQ NYSE AMEX BINANCE FX CME_MINI NYMEX COMEX CBOT",
             parse_mode="Markdown"
         )
 
