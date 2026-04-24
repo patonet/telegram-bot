@@ -2,3 +2,4 @@ flask
 python-telegram-bot
 apscheduler
 tradingview-scraper
+setuptools
