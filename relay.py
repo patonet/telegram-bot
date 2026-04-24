@@ -30,7 +30,7 @@ def detect_exchange(symbol):
         return "BINANCE"
     etfs = ["SPY","QQQ","IWM","DIA","GLD","SLV","USO","TLT","IEF","HYG","LQD","EEM","VTI","VOO","VEA","VWO","XLF","XLE","XLK","XLV","XLI","XLU","XLP","XLY","XLB","ARKK","ARKG","ARKW"]
     if s in etfs: return "AMEX"
-    nyse = ["JPM","BAC","WFC","GS","MS","C","V","MA","XOM","CVX","JNJ","PG","KO","PEP","MCD","WMT","HD","DIS","BA","GE","IBM","MMM","CAT","T","VZ","BRK.A","BRK.B"]
+    nyse = ["JPM","BAC","WFC","GS","MS","C","V","MA","XOM","CVX","JNJ","PG","KO","PEP","MCD","WMT","HD","DIS","BA","GE","IBM","MMM","CAT","T","VZ","BRK.A","BRK.B","COST","AXP","UNH","CVS","MO","PM","LMT","RTX","HON","UPS","FDX","SBUX","NKE","TGT","LOW","TJX","CL","PFE","MRK","ABBV","ABT","MDT","BMY","AMGN","BLK","SCHW","AIG","MET","PRU","USB","PNC","TFC","COF","ADP","ICE","CME","AON","MMC","SPG","PSA","O","AMT","CCI","DLR","WELL"]
     if s in nyse: return "NYSE"
     return "NASDAQ"
 
