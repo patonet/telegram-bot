@@ -226,6 +226,7 @@ def main():
     bot_loop = asyncio.new_event_loop()
     tg_app.add_handler(CommandHandler("start",  start))
     tg_app.add_handler(CommandHandler("precio", precio))
+    tg_app.add_handler(CommandHandler("p", precio))
     tg_app.add_handler(CommandHandler("watch",  watch))
     tg_app.add_handler(CommandHandler("stop",   stop_watch))
     tg_app.add_handler(CommandHandler("lista",  lista))
